@@ -1,0 +1,526 @@
+### .github/workflows/checks.yml ###
+name: Terraform Checks
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  checks-shared:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+      - name: Terraform init (no backend, just lint)
+        run: terraform init -backend=false
+      - name: Terraform validate
+        run: terraform validate
+
+  checks-pgadmin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pgadmin
+    env:
+      TF_VAR_pgadmin_email: ${{ secrets.PGADMIN_EMAIL }}
+      TF_VAR_pgadmin_password: ${{ secrets.PGADMIN_PASSWORD }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+      - name: Terraform init (no backend, just lint)
+        run: terraform init -backend=false
+      - name: Terraform validate
+        run: terraform validate
+
+### .github/workflows/deploy.yml ###
+name: Deploy
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  deploy-shared:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan -out=tfplan
+      - run: terraform apply -auto-approve tfplan
+
+  deploy-pgadmin:
+    needs: deploy-shared
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pgadmin
+    env:
+      TF_VAR_pgadmin_email: ${{ secrets.PGADMIN_EMAIL }}
+      TF_VAR_pgadmin_password: ${{ secrets.PGADMIN_PASSWORD }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan -out=tfplan
+      - run: terraform apply -auto-approve tfplan
+
+### .github/workflows/destroy.yml ###
+name: Destroy
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  destroy-pgadmin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pgadmin
+    env:
+      TF_VAR_pgadmin_email: ${{ secrets.PGADMIN_EMAIL }}
+      TF_VAR_pgadmin_password: ${{ secrets.PGADMIN_PASSWORD }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform destroy -auto-approve
+
+  destroy-shared:
+    needs: destroy-pgadmin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform destroy -auto-approve
+
+### .github/workflows/test-and-lint.yml ###
+name: Test & Lint
+
+on:
+  pull_request:
+
+jobs:
+  lint-shared:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  lint-pgadmin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pgadmin
+    env:
+      TF_VAR_pgadmin_email: ${{ secrets.PGADMIN_EMAIL }}
+      TF_VAR_pgadmin_password: ${{ secrets.PGADMIN_PASSWORD }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+### terraform/backend.tf ###
+terraform {
+  backend "s3" {
+    bucket         = "pgadmin-terraform-state-test"
+    key            = "terraform/terraform.tfstate" # shared infra state
+    region         = "us-east-1"
+    dynamodb_table = "pgadmin-terraform-locks" # keep existing table
+    encrypt        = true
+  }
+}
+
+### terraform/locals.tf ###
+locals {
+  tags = {
+    ManagedBy = "Terraform"
+    Layer     = "SharedInfra"
+  }
+}
+
+### terraform/main.tf ###
+# EFS (shared across apps like pgAdmin, Marquez)
+module "efs" {
+  source = "../APP-modules/efs"
+
+  name       = "shared-efs"
+  vpc_id     = var.vpc_id
+  subnet_ids = var.private_subnet_ids
+  tags       = local.tags
+
+  create_security_group = true
+
+  access_points = [
+    {
+      name        = "pgadmin"
+      path        = "/pgadmin"
+      uid         = 5050
+      gid         = 5050
+      permissions = "750"
+    },
+    {
+      name        = "marquez"
+      path        = "/marquez"
+      uid         = 1000
+      gid         = 1000
+      permissions = "750"
+    }
+  ]
+}
+
+# VPC Endpoints
+module "vpc_endpoints" {
+  source = "../APP-modules/vpc_endpoints"
+
+  name                    = "shared-vpce"
+  vpc_id                  = var.vpc_id
+  region                  = var.region
+  subnet_ids              = var.private_subnet_ids
+  private_route_table_ids = var.private_route_table_ids
+  tags                    = local.tags
+}
+
+### terraform/outputs.tf ###
+output "efs_id" {
+  description = "EFS filesystem ID"
+  value       = module.efs.file_system_id
+}
+
+output "efs_access_points" {
+  description = "Map of access point names to IDs"
+  value       = module.efs.access_point_ids_by_name
+}
+
+output "efs_sg_id" {
+  description = "EFS security group ID"
+  value       = module.efs.security_group_id
+}
+
+output "vpc_endpoint_ids" {
+  description = "IDs of VPC endpoints"
+  value       = module.vpc_endpoints.endpoint_ids
+}
+
+output "vpc_id" {
+  value = var.vpc_id
+}
+output "private_subnet_ids" {
+  value = var.private_subnet_ids
+}
+output "public_subnet_ids" {
+  value = var.public_subnet_ids
+}
+output "region" {
+  value = var.region
+}
+
+### terraform/variables.tf ###
+variable "region" {
+  type        = string
+  default     = "us-east-1"
+  description = "AWS region for pgAdmin deployment"
+}
+
+variable "vpc_id" {
+  type        = string
+  default     = "vpc-0acff19cbcdd28123"
+  description = "Existing VPC ID"
+}
+
+variable "public_subnet_ids" {
+  type = list(string)
+  default = [
+    "subnet-0096b55bfec0fc1b7",
+    "subnet-0baa7f08adef5addb",
+    "subnet-03be7e34785dcc9ed"
+  ]
+  description = "Public subnets for ALB"
+}
+
+variable "private_subnet_ids" {
+  type = list(string)
+  default = [
+    "subnet-0f15865ff763a4cd2",
+    "subnet-05fe1790c8745cf07",
+    "subnet-05a98b6683351fe11"
+  ]
+  description = "Private subnets for ECS tasks and EFS mount targets"
+}
+
+variable "nated_subnet_ids" {
+  type = list(string)
+  default = [
+    "subnet-0c30e0a79884dfd82",
+    "subnet-043c7e91ecd807a0c",
+    "subnet-063f7cf49a5ac401c"
+  ]
+  description = "NAT subnets (optional, if needed for endpoints)"
+}
+
+variable "tags" {
+  type    = map(string)
+  default = { Project = "pgadmin" }
+}
+
+variable "private_route_table_ids" {
+  type        = list(string)
+  default     = ["rtb-04eae072f5cad1ef9"] # Private-Route
+  description = "Private route table IDs for S3 gateway endpoint (required for ECS to pull from ECR)"
+}
+
+### terraform/versions.tf ###
+terraform {
+  required_version = ">= 1.3.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+### terraform/terraform.tfvars ###
+region = "us-east-1"
+
+vpc_id             = "vpc-0acff19cbcdd28123"
+private_subnet_ids = ["subnet-0f15865ff763a4cd2", "subnet-05fe1790c8745cf07", "subnet-05a98b6683351fe11"]
+public_subnet_ids  = ["subnet-0096b55bfec0fc1b7", "subnet-0baa7f08adef5addb", "subnet-03be7e34785dcc9ed"]
+
+
+### pgadmin/backend.tf ###
+terraform {
+  backend "s3" {
+    bucket         = "pgadmin-terraform-state-test"
+    key            = "pgadmin/terraform.tfstate" # pgadmin app state
+    region         = "us-east-1"
+    dynamodb_table = "pgadmin-terraform-locks" # same table for locks
+    encrypt        = true
+  }
+}
+
+### pgadmin/locals.tf ###
+locals {
+  app_name = "pgadmin"
+
+  tags = {
+    Application = local.app_name
+    Owner       = "DataPlatform"
+  }
+}
+
+### pgadmin/main.tf ###
+# Import shared infra (terraform/ state)
+data "terraform_remote_state" "infra" {
+  backend = "s3"
+  config = {
+    bucket = "pgadmin-terraform-state-test"
+    key    = "terraform/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
+# ECR Repo
+module "ecr" {
+  source = "../APP-modules/ecr"
+  name   = local.app_name
+  tags   = local.tags
+}
+
+# IAM Roles
+module "iam" {
+  source = "../APP-modules/iam"
+  name   = local.app_name
+  tags   = local.tags
+}
+
+# Security Groups
+module "security_groups" {
+  source         = "../APP-modules/security_groups"
+  name           = local.app_name
+  vpc_id         = var.vpc_id
+  container_port = 80
+  tags           = local.tags
+}
+
+# Secrets
+module "secrets" {
+  source           = "../APP-modules/secrets"
+  name             = local.app_name
+  pgadmin_email    = var.pgadmin_email
+  pgadmin_password = var.pgadmin_password
+  tags             = local.tags
+}
+
+# ALB
+module "alb" {
+  source            = "../APP-modules/alb"
+  name              = local.app_name
+  vpc_id            = var.vpc_id
+  public_subnet_ids = var.public_subnet_ids
+  sg_id             = module.security_groups.ecs_sg_id
+  container_port    = 80
+  tags              = local.tags
+}
+
+# ECS
+module "ecs" {
+  source               = "../APP-modules/ecs"
+  name                 = local.app_name
+  execution_role_arn   = module.iam.execution_role_arn
+  task_role_arn        = module.iam.task_role_arn
+  ecr_repo_url         = module.ecr.repository_url
+  image_tag            = var.image_tag
+  efs_id               = data.terraform_remote_state.infra.outputs.efs_id
+  efs_access_point_id  = data.terraform_remote_state.infra.outputs.efs_access_points[local.app_name]
+  ecs_sg_id            = module.security_groups.ecs_sg_id
+  alb_target_group_arn = module.alb.target_group_arn
+  private_subnet_ids   = var.private_subnet_ids
+  public_subnet_ids    = var.public_subnet_ids
+  pgadmin_secret_arn   = module.secrets.pgadmin_secret_arn
+  region               = var.region
+  tags                 = local.tags
+}
+
+# Autoscaling
+module "pgadmin_autoscaling" {
+  source              = "../APP-modules/autoscaling"
+  name                = local.app_name
+  cluster_name        = module.ecs.ecs_cluster_name
+  service_name        = module.ecs.ecs_service_name
+  min_capacity        = 1
+  max_capacity        = 3
+  cpu_target_value    = 70
+  memory_target_value = 75
+  tags                = local.tags
+}
+
+# CloudWatch
+module "pgadmin_cloudwatch" {
+  source                 = "../APP-modules/cloudwatch"
+  name                   = local.app_name
+  cluster_name           = module.ecs.ecs_cluster_name
+  service_name           = module.ecs.ecs_service_name
+  alert_email            = var.alert_email
+  cpu_alarm_threshold    = 80
+  memory_alarm_threshold = 85
+  tags                   = local.tags
+}
+
+### pgadmin/outputs.tf ###
+output "pgadmin_alb_dns" {
+  value       = module.alb.alb_dns_name
+  description = "DNS name of the pgAdmin ALB"
+}
+
+output "pgadmin_service_name" {
+  value       = module.ecs.ecs_service_name
+  description = "Name of ECS service for pgAdmin"
+}
+
+### pgadmin/variables.tf ###
+variable "region" {
+  type        = string
+  description = "AWS region"
+}
+
+variable "image_tag" {
+  type        = string
+  description = "ECR image tag for pgAdmin"
+}
+
+variable "pgadmin_email" {
+  type        = string
+  description = "Default pgAdmin admin email"
+}
+
+variable "pgadmin_password" {
+  type        = string
+  description = "Default pgAdmin admin password"
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "VPC ID"
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "List of private subnet IDs"
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "List of public subnet IDs"
+}
+
+variable "alert_email" {
+  type        = string
+  description = "Email address for CloudWatch alerts"
+}
+
+### pgadmin/terraform.tfvars ###
+
+image_tag        = "latest" # or specific version
+pgadmin_email    = "admin@dataplatform.adcbmis.local"
+pgadmin_password = "ChangeMe123!" # or omit for CI/CD, where GitHub injects secrets
+
+region = "us-east-1"
+
+vpc_id             = "vpc-0acff19cbcdd28123"
+private_subnet_ids = ["subnet-0f15865ff763a4cd2", "subnet-05fe1790c8745cf07", "subnet-05a98b6683351fe11"]
+public_subnet_ids  = ["subnet-0096b55bfec0fc1b7", "subnet-0baa7f08adef5addb", "subnet-03be7e34785dcc9ed"]
+
+alert_email = "alerts@dataplatform.adcbmis.local"

@@ -1,0 +1,42 @@
+name: Destroy
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  destroy-pgadmin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pgadmin
+    env:
+      TF_VAR_pgadmin_email: ${{ secrets.PGADMIN_EMAIL }}
+      TF_VAR_pgadmin_password: ${{ secrets.PGADMIN_PASSWORD }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform destroy -auto-approve
+
+  destroy-shared:
+    needs: destroy-pgadmin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform destroy -auto-approve
