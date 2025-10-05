@@ -22,12 +22,4 @@
   echo -e "\n### pgadmin/outputs.tf ###"; cat pgadmin/outputs.tf;
   echo -e "\n### pgadmin/variables.tf ###"; cat pgadmin/variables.tf;
   echo -e "\n### pgadmin/terraform.tfvars ###"; cat pgadmin/terraform.tfvars;
-
-  # marquez Directory
-  echo -e "\n### marquez/backend.tf ###"; cat marquez/backend.tf;
-  echo -e "\n### marquez/locals.tf ###"; cat marquez/locals.tf;
-  echo -e "\n### marquez/main.tf ###"; cat marquez/main.tf;
-  echo -e "\n### marquez/outputs.tf ###"; cat marquez/outputs.tf;
-  echo -e "\n### marquez/variables.tf ###"; cat marquez/variables.tf;
-  echo -e "\n### marquez/terraform.tfvars ###"; cat marquez/terraform.tfvars;
-} > all_apps_infra_code-03.txt
+} > all_apps_infra_code-02.txt

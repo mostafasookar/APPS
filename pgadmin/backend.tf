@@ -1,9 +1,9 @@
 terraform {
   backend "s3" {
     bucket         = "pgadmin-terraform-state-test"
-    key            = "pgadmin/terraform.tfstate" # pgadmin app state
+    key            = "pgadmin/terraform.tfstate"
     region         = "us-east-1"
-    dynamodb_table = "pgadmin-terraform-locks" # same table for locks
+    dynamodb_table = "pgadmin-terraform-locks"
     encrypt        = true
   }
 }

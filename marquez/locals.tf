@@ -1,5 +1,5 @@
 locals {
-  app_name = "pgadmin"
+  app_name = "marquez"
 
   tags = {
     Application = local.app_name

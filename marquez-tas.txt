@@ -1,0 +1,281 @@
+{
+    "taskDefinition": {
+        "taskDefinitionArn": "arn:aws:ecs:us-east-1:286452157068:task-definition/marquez-task:16",
+        "containerDefinitions": [
+            {
+                "name": "db",
+                "image": "286452157068.dkr.ecr.us-east-1.amazonaws.com/marquez-db:latest",
+                "cpu": 0,
+                "portMappings": [
+                    {
+                        "containerPort": 5432,
+                        "hostPort": 5432,
+                        "protocol": "tcp"
+                    }
+                ],
+                "essential": true,
+                "environment": [
+                    {
+                        "name": "POSTGRES_USER",
+                        "value": "marquez"
+                    },
+                    {
+                        "name": "POSTGRES_PASSWORD",
+                        "value": "ChangeMe123!"
+                    },
+                    {
+                        "name": "POSTGRES_DB",
+                        "value": "marquez"
+                    }
+                ],
+                "mountPoints": [
+                    {
+                        "sourceVolume": "efs-postgres-volume",
+                        "containerPath": "/var/lib/postgresql/data",
+                        "readOnly": false
+                    }
+                ],
+                "volumesFrom": [],
+                "logConfiguration": {
+                    "logDriver": "awslogs",
+                    "options": {
+                        "awslogs-group": "/ecs/marquez",
+                        "awslogs-region": "us-east-1",
+                        "awslogs-stream-prefix": "db"
+                    }
+                },
+                "healthCheck": {
+                    "command": [
+                        "CMD-SHELL",
+                        "pg_isready -U marquez -d marquez"
+                    ],
+                    "interval": 30,
+                    "timeout": 5,
+                    "retries": 3,
+                    "startPeriod": 300
+                },
+                "systemControls": []
+            },
+            {
+                "name": "api",
+                "image": "286452157068.dkr.ecr.us-east-1.amazonaws.com/marquez-api:latest",
+                "cpu": 0,
+                "portMappings": [
+                    {
+                        "containerPort": 5000,
+                        "hostPort": 5000,
+                        "protocol": "tcp"
+                    },
+                    {
+                        "containerPort": 5001,
+                        "hostPort": 5001,
+                        "protocol": "tcp"
+                    }
+                ],
+                "essential": true,
+                "entryPoint": [
+                    "/opt/marquez/wait-for-it.sh",
+                    "/app/marquez.jar"
+                ],
+                "environment": [
+                    {
+                        "name": "POSTGRES_PORT",
+                        "value": "5432"
+                    },
+                    {
+                        "name": "MARQUEZ_PORT",
+                        "value": "5000"
+                    },
+                    {
+                        "name": "SEARCH_ENABLED",
+                        "value": "false"
+                    },
+                    {
+                        "name": "POSTGRES_HOST",
+                        "value": "localhost"
+                    },
+                    {
+                        "name": "MARQUEZ_ADMIN_PORT",
+                        "value": "5001"
+                    }
+                ],
+                "mountPoints": [
+                    {
+                        "sourceVolume": "efs-api-volume",
+                        "containerPath": "/opt/marquez",
+                        "readOnly": false
+                    }
+                ],
+                "volumesFrom": [],
+                "secrets": [
+                    {
+                        "name": "POSTGRES_USER",
+                        "valueFrom": "arn:aws:secretsmanager:us-east-1:286452157068:secret:marquez-db-2vLVZ-YetljB:POSTGRES_USER::"
+                    },
+                    {
+                        "name": "POSTGRES_PASSWORD",
+                        "valueFrom": "arn:aws:secretsmanager:us-east-1:286452157068:secret:marquez-db-2vLVZ-YetljB:POSTGRES_PASSWORD::"
+                    },
+                    {
+                        "name": "MARQUEZ_DB",
+                        "valueFrom": "arn:aws:secretsmanager:us-east-1:286452157068:secret:marquez-db-2vLVZ-YetljB:POSTGRES_DB::"
+                    }
+                ],
+                "dependsOn": [
+                    {
+                        "containerName": "db",
+                        "condition": "HEALTHY"
+                    }
+                ],
+                "logConfiguration": {
+                    "logDriver": "awslogs",
+                    "options": {
+                        "awslogs-group": "/ecs/marquez",
+                        "awslogs-region": "us-east-1",
+                        "awslogs-stream-prefix": "api"
+                    }
+                },
+                "healthCheck": {
+                    "command": [
+                        "CMD-SHELL",
+                        "nc -z localhost 5432 || exit 1"
+                    ],
+                    "interval": 30,
+                    "timeout": 5,
+                    "retries": 3,
+                    "startPeriod": 300
+                },
+                "systemControls": []
+            },
+            {
+                "name": "web",
+                "image": "286452157068.dkr.ecr.us-east-1.amazonaws.com/marquez-web:latest",
+                "cpu": 0,
+                "portMappings": [
+                    {
+                        "containerPort": 3000,
+                        "hostPort": 3000,
+                        "protocol": "tcp"
+                    }
+                ],
+                "essential": true,
+                "environment": [
+                    {
+                        "name": "API_URL",
+                        "value": "http://api:5000"
+                    }
+                ],
+                "mountPoints": [],
+                "volumesFrom": [],
+                "dependsOn": [
+                    {
+                        "containerName": "api",
+                        "condition": "START"
+                    }
+                ],
+                "logConfiguration": {
+                    "logDriver": "awslogs",
+                    "options": {
+                        "awslogs-group": "/ecs/marquez",
+                        "awslogs-region": "us-east-1",
+                        "awslogs-stream-prefix": "web"
+                    }
+                },
+                "systemControls": []
+            }
+        ],
+        "family": "marquez-task",
+        "taskRoleArn": "arn:aws:iam::286452157068:role/marquez-ecs-task-role",
+        "executionRoleArn": "arn:aws:iam::286452157068:role/marquez-ecs-execution-role",
+        "networkMode": "awsvpc",
+        "revision": 16,
+        "volumes": [
+            {
+                "name": "efs-api-volume",
+                "efsVolumeConfiguration": {
+                    "fileSystemId": "fs-0b1106a7dd836a113",
+                    "rootDirectory": "/",
+                    "transitEncryption": "ENABLED",
+                    "authorizationConfig": {
+                        "accessPointId": "fsap-004c15b36408abf7a",
+                        "iam": "ENABLED"
+                    }
+                }
+            },
+            {
+                "name": "efs-postgres-volume",
+                "efsVolumeConfiguration": {
+                    "fileSystemId": "fs-0b1106a7dd836a113",
+                    "rootDirectory": "/",
+                    "transitEncryption": "ENABLED",
+                    "authorizationConfig": {
+                        "accessPointId": "fsap-0fbb22aa5e0f04093",
+                        "iam": "ENABLED"
+                    }
+                }
+            }
+        ],
+        "status": "ACTIVE",
+        "requiresAttributes": [
+            {
+                "name": "ecs.capability.execution-role-awslogs"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.ecr-auth"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.task-iam-role"
+            },
+            {
+                "name": "ecs.capability.container-health-check"
+            },
+            {
+                "name": "ecs.capability.execution-role-ecr-pull"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.18"
+            },
+            {
+                "name": "ecs.capability.task-eni"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.29"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.logging-driver.awslogs"
+            },
+            {
+                "name": "ecs.capability.efsAuth"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.19"
+            },
+            {
+                "name": "ecs.capability.secrets.asm.environment-variables"
+            },
+            {
+                "name": "ecs.capability.efs"
+            },
+            {
+                "name": "ecs.capability.container-ordering"
+            },
+            {
+                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.25"
+            }
+        ],
+        "placementConstraints": [],
+        "compatibilities": [
+            "EC2",
+            "FARGATE",
+            "MANAGED_INSTANCES"
+        ],
+        "requiresCompatibilities": [
+            "FARGATE"
+        ],
+        "cpu": "4096",
+        "memory": "8192",
+        "registeredAt": "2025-10-05T15:30:48.033000+04:00",
+        "registeredBy": "arn:aws:iam::286452157068:user/recipe-app-api-cd"
+    },
+    "tags": []
+}

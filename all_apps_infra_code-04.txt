@@ -14,12 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
-      - name: Terraform fmt check
-        run: terraform fmt -check -recursive
-      - name: Terraform init (no backend, just lint)
-        run: terraform init -backend=false
-      - name: Terraform validate
-        run: terraform validate
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
 
   checks-pgadmin:
     runs-on: ubuntu-latest
@@ -33,12 +30,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
-      - name: Terraform fmt check
-        run: terraform fmt -check -recursive
-      - name: Terraform init (no backend, just lint)
-        run: terraform init -backend=false
-      - name: Terraform validate
-        run: terraform validate
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  checks-marquez:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marquez
+    env:
+      TF_VAR_marquez_db_user:     ${{ secrets.MARQUEZ_DB_USER }}
+      TF_VAR_marquez_db_password: ${{ secrets.MARQUEZ_DB_PASSWORD }}
+      TF_VAR_marquez_db_name:     ${{ vars.MARQUEZ_DB_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
 
 ### .github/workflows/deploy.yml ###
 name: Deploy
@@ -88,6 +98,28 @@ jobs:
       - run: terraform plan -out=tfplan
       - run: terraform apply -auto-approve tfplan
 
+  deploy-marquez:
+    needs: deploy-pgadmin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marquez
+    env:
+      TF_VAR_marquez_db_user:     ${{ secrets.MARQUEZ_DB_USER }}
+      TF_VAR_marquez_db_password: ${{ secrets.MARQUEZ_DB_PASSWORD }}
+      TF_VAR_marquez_db_name:     ${{ vars.MARQUEZ_DB_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan -out=tfplan
+      - run: terraform apply -auto-approve tfplan
+
 ### .github/workflows/destroy.yml ###
 name: Destroy
 
@@ -95,7 +127,28 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  destroy-marquez:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marquez
+    env:
+      TF_VAR_marquez_db_user:     ${{ secrets.MARQUEZ_DB_USER }}
+      TF_VAR_marquez_db_password: ${{ secrets.MARQUEZ_DB_PASSWORD }}
+      TF_VAR_marquez_db_name:     ${{ vars.MARQUEZ_DB_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform destroy -auto-approve
+
   destroy-pgadmin:
+    needs: destroy-marquez
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -167,13 +220,29 @@ jobs:
       - run: terraform init -backend=false
       - run: terraform validate
 
+  lint-marquez:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marquez
+    env:
+      TF_VAR_marquez_db_user:     ${{ secrets.MARQUEZ_DB_USER }}
+      TF_VAR_marquez_db_password: ${{ secrets.MARQUEZ_DB_PASSWORD }}
+      TF_VAR_marquez_db_name:     ${{ vars.MARQUEZ_DB_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
 ### terraform/backend.tf ###
 terraform {
   backend "s3" {
     bucket         = "pgadmin-terraform-state-test"
-    key            = "terraform/terraform.tfstate" # shared infra state
+    key            = "terraform/terraform.tfstate"
     region         = "us-east-1"
-    dynamodb_table = "pgadmin-terraform-locks" # keep existing table
+    dynamodb_table = "pgadmin-terraform-locks"
     encrypt        = true
   }
 }
@@ -187,7 +256,79 @@ locals {
 }
 
 ### terraform/main.tf ###
-# EFS (shared across apps like pgAdmin, Marquez)
+############################
+# Shared ECS Cluster
+############################
+resource "aws_ecs_cluster" "shared" {
+  name = "shared-ecs-cluster"
+
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+
+  tags = merge(local.tags, { Name = "shared-ecs-cluster" })
+}
+
+############################
+# Shared ALB + SG
+############################
+resource "aws_security_group" "alb" {
+  name        = "shared-alb-sg"
+  description = "ALB security group"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # (Optional) Enable 443 later
+  # ingress { ... }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.tags, { Name = "shared-alb-sg" })
+}
+
+resource "aws_lb" "shared" {
+  name               = "shared-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = var.public_subnet_ids
+
+  enable_deletion_protection = false
+  idle_timeout               = 60
+
+  tags = merge(local.tags, { Name = "shared-alb" })
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.shared.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "OK"
+      status_code  = "200"
+    }
+  }
+}
+
+############################
+# Shared EFS (per-app APs)
+############################
 module "efs" {
   source = "../APP-modules/efs"
 
@@ -216,7 +357,9 @@ module "efs" {
   ]
 }
 
-# VPC Endpoints
+############################
+# VPC Interface Endpoints
+############################
 module "vpc_endpoints" {
   source = "../APP-modules/vpc_endpoints"
 
@@ -229,6 +372,31 @@ module "vpc_endpoints" {
 }
 
 ### terraform/outputs.tf ###
+# ECS
+output "ecs_cluster_name" {
+  value       = aws_ecs_cluster.shared.name
+  description = "Shared ECS cluster name"
+}
+
+# ALB
+output "alb_arn" {
+  value       = aws_lb.shared.arn
+  description = "Shared ALB ARN"
+}
+output "alb_dns_name" {
+  value       = aws_lb.shared.dns_name
+  description = "Shared ALB DNS name"
+}
+output "alb_listener_arn_80" {
+  value       = aws_lb_listener.http.arn
+  description = "HTTP(80) listener ARN"
+}
+output "alb_sg_id" {
+  value       = aws_security_group.alb.id
+  description = "ALB security group ID"
+}
+
+# EFS
 output "efs_id" {
   description = "EFS filesystem ID"
   value       = module.efs.file_system_id
@@ -244,11 +412,13 @@ output "efs_sg_id" {
   value       = module.efs.security_group_id
 }
 
+# VPC Endpoints
 output "vpc_endpoint_ids" {
   description = "IDs of VPC endpoints"
   value       = module.vpc_endpoints.endpoint_ids
 }
 
+# VPC/Subnets/Region
 output "vpc_id" {
   value = var.vpc_id
 }
@@ -324,14 +494,13 @@ vpc_id             = "vpc-0acff19cbcdd28123"
 private_subnet_ids = ["subnet-0f15865ff763a4cd2", "subnet-05fe1790c8745cf07", "subnet-05a98b6683351fe11"]
 public_subnet_ids  = ["subnet-0096b55bfec0fc1b7", "subnet-0baa7f08adef5addb", "subnet-03be7e34785dcc9ed"]
 
-
 ### pgadmin/backend.tf ###
 terraform {
   backend "s3" {
     bucket         = "pgadmin-terraform-state-test"
-    key            = "pgadmin/terraform.tfstate" # pgadmin app state
+    key            = "pgadmin/terraform.tfstate"
     region         = "us-east-1"
-    dynamodb_table = "pgadmin-terraform-locks" # same table for locks
+    dynamodb_table = "pgadmin-terraform-locks"
     encrypt        = true
   }
 }
@@ -343,11 +512,14 @@ locals {
   tags = {
     Application = local.app_name
     Owner       = "DataPlatform"
+    ManagedBy   = "Terraform"
   }
 }
 
 ### pgadmin/main.tf ###
-# Import shared infra (terraform/ state)
+############################
+# Bring shared outputs
+############################
 data "terraform_remote_state" "infra" {
   backend = "s3"
   config = {
@@ -357,30 +529,38 @@ data "terraform_remote_state" "infra" {
   }
 }
 
-# ECR Repo
+############################
+# ECR (one repo for pgAdmin)
+############################
 module "ecr" {
   source = "../APP-modules/ecr"
   name   = local.app_name
   tags   = local.tags
 }
 
-# IAM Roles
+############################
+# IAM roles
+############################
 module "iam" {
   source = "../APP-modules/iam"
   name   = local.app_name
   tags   = local.tags
 }
 
-# Security Groups
+############################
+# Security Group (for tasks)
+############################
 module "security_groups" {
   source         = "../APP-modules/security_groups"
   name           = local.app_name
-  vpc_id         = var.vpc_id
+  vpc_id         = data.terraform_remote_state.infra.outputs.vpc_id
   container_port = 80
   tags           = local.tags
 }
 
-# Secrets
+############################
+# Secrets for login
+############################
 module "secrets" {
   source           = "../APP-modules/secrets"
   name             = local.app_name
@@ -389,70 +569,159 @@ module "secrets" {
   tags             = local.tags
 }
 
-# ALB
-module "alb" {
-  source            = "../APP-modules/alb"
-  name              = local.app_name
-  vpc_id            = var.vpc_id
-  public_subnet_ids = var.public_subnet_ids
-  sg_id             = module.security_groups.ecs_sg_id
-  container_port    = 80
+############################
+# Logs (split per app)
+############################
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${local.app_name}"
+  retention_in_days = 14
   tags              = local.tags
 }
 
-# ECS
-module "ecs" {
-  source               = "../APP-modules/ecs"
-  name                 = local.app_name
-  execution_role_arn   = module.iam.execution_role_arn
-  task_role_arn        = module.iam.task_role_arn
-  ecr_repo_url         = module.ecr.repository_url
-  image_tag            = var.image_tag
-  efs_id               = data.terraform_remote_state.infra.outputs.efs_id
-  efs_access_point_id  = data.terraform_remote_state.infra.outputs.efs_access_points[local.app_name]
-  ecs_sg_id            = module.security_groups.ecs_sg_id
-  alb_target_group_arn = module.alb.target_group_arn
-  private_subnet_ids   = var.private_subnet_ids
-  public_subnet_ids    = var.public_subnet_ids
-  pgadmin_secret_arn   = module.secrets.pgadmin_secret_arn
-  region               = var.region
-  tags                 = local.tags
+############################
+# Target Group + ALB Rule
+############################
+resource "aws_lb_target_group" "app" {
+  name        = "${local.app_name}-tg"
+  port        = 80
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = data.terraform_remote_state.infra.outputs.vpc_id
+
+  health_check {
+    path                = "/misc/ping"
+    protocol            = "HTTP"
+    matcher             = "200-499"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  tags = merge(local.tags, { Name = "${local.app_name}-tg" })
 }
 
-# Autoscaling
-module "pgadmin_autoscaling" {
-  source              = "../APP-modules/autoscaling"
-  name                = local.app_name
-  cluster_name        = module.ecs.ecs_cluster_name
-  service_name        = module.ecs.ecs_service_name
-  min_capacity        = 1
-  max_capacity        = 3
-  cpu_target_value    = 70
-  memory_target_value = 75
-  tags                = local.tags
+resource "aws_lb_listener_rule" "app" {
+  listener_arn = data.terraform_remote_state.infra.outputs.alb_listener_arn_80
+  priority     = 10
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/*"]
+    }
+  }
+
+  tags = local.tags
 }
 
-# CloudWatch
-module "pgadmin_cloudwatch" {
-  source                 = "../APP-modules/cloudwatch"
-  name                   = local.app_name
-  cluster_name           = module.ecs.ecs_cluster_name
-  service_name           = module.ecs.ecs_service_name
-  alert_email            = var.alert_email
-  cpu_alarm_threshold    = 80
-  memory_alarm_threshold = 85
-  tags                   = local.tags
+############################
+# Task Definition
+############################
+resource "aws_ecs_task_definition" "app" {
+  family                   = "${local.app_name}-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = module.iam.execution_role_arn
+  task_role_arn            = module.iam.task_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "pgadmin"
+      image     = "${module.ecr.repository_url}:${var.image_tag}"
+      essential = true
+      portMappings = [
+        { containerPort = 80, hostPort = 80, protocol = "tcp" }
+      ]
+      mountPoints = [
+        { sourceVolume = "efs-volume", containerPath = "/var/lib/pgadmin", readOnly = false }
+      ]
+      secrets = [
+        { name = "PGADMIN_DEFAULT_EMAIL", valueFrom = "${module.secrets.pgadmin_secret_arn}:PGADMIN_DEFAULT_EMAIL::" },
+        { name = "PGADMIN_DEFAULT_PASSWORD", valueFrom = "${module.secrets.pgadmin_secret_arn}:PGADMIN_DEFAULT_PASSWORD::" }
+      ]
+      environment = [
+        { name = "PGADMIN_LISTEN_PORT", value = "80" }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = data.terraform_remote_state.infra.outputs.region
+          awslogs-stream-prefix = "pgadmin"
+        }
+      }
+    }
+  ])
+
+  volume {
+    name = "efs-volume"
+    efs_volume_configuration {
+      file_system_id     = data.terraform_remote_state.infra.outputs.efs_id
+      transit_encryption = "ENABLED"
+      authorization_config {
+        access_point_id = data.terraform_remote_state.infra.outputs.efs_access_points["pgadmin"]
+      }
+    }
+  }
+
+  tags = local.tags
+}
+
+############################
+# Service (shared cluster)
+############################
+resource "aws_ecs_service" "app" {
+  name            = "${local.app_name}-service"
+  cluster         = data.terraform_remote_state.infra.outputs.ecs_cluster_name
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = data.terraform_remote_state.infra.outputs.private_subnet_ids
+    assign_public_ip = false
+    security_groups  = [module.security_groups.ecs_sg_id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = "pgadmin"
+    container_port   = 80
+  }
+
+  deployment_controller { type = "ECS" }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  enable_execute_command = true
+
+  tags = local.tags
 }
 
 ### pgadmin/outputs.tf ###
 output "pgadmin_alb_dns" {
-  value       = module.alb.alb_dns_name
-  description = "DNS name of the pgAdmin ALB"
+  description = "ALB DNS name for pgAdmin"
+  value       = data.terraform_remote_state.infra.outputs.alb_dns_name
 }
 
 output "pgadmin_service_name" {
-  value       = module.ecs.ecs_service_name
-  description = "Name of ECS service for pgAdmin"
+  description = "ECS service name for pgAdmin"
+  value       = aws_ecs_service.app.name
+}
+
+output "pgadmin_url" {
+  description = "Open pgAdmin in browser"
+  value       = "http://${data.terraform_remote_state.infra.outputs.alb_dns_name}/"
 }
 
 ### pgadmin/variables.tf ###
@@ -476,37 +745,28 @@ variable "pgadmin_email" {
 variable "pgadmin_password" {
   type        = string
   description = "Default pgAdmin admin password (from GitHub Secrets in CI/CD)"
+  sensitive   = true
+}
+
+variable "alert_email" {
+  type        = string
+  description = "Email address for CloudWatch alerts (optional)"
+  default     = null
 }
 
 variable "vpc_id" {
   type        = string
-  default     = "vpc-0acff19cbcdd28123"
   description = "VPC ID"
 }
 
 variable "private_subnet_ids" {
   type        = list(string)
-  default     = [
-    "subnet-0f15865ff763a4cd2",
-    "subnet-05fe1790c8745cf07",
-    "subnet-05a98b6683351fe11"
-  ]
   description = "Private subnets for ECS tasks"
 }
 
 variable "public_subnet_ids" {
   type        = list(string)
-  default     = [
-    "subnet-0096b55bfec0fc1b7",
-    "subnet-0baa7f08adef5addb",
-    "subnet-03be7e34785dcc9ed"
-  ]
   description = "Public subnets for ALB"
-}
-
-variable "alert_email" {
-  type        = string
-  description = "Email address for CloudWatch alerts (from GitHub Secrets in CI/CD)"
 }
 
 ### pgadmin/terraform.tfvars ###
@@ -547,7 +807,7 @@ locals {
 
 ### marquez/main.tf ###
 ############################
-# Shared state (VPC / EFS) #
+# Bring shared outputs
 ############################
 data "terraform_remote_state" "infra" {
   backend = "s3"
@@ -559,27 +819,31 @@ data "terraform_remote_state" "infra" {
 }
 
 ############################
-# Reuse existing ECS stuff #
+# ECR (4 repos)
 ############################
-
-# Reuse the *same ECS cluster* created by pgAdmin module ("pgadmin-cluster")
-data "aws_ecs_cluster" "shared" {
-  cluster_name = "pgadmin-cluster"
+module "ecr_api" {
+  source = "../APP-modules/ecr"
+  name   = "${local.app_name}-api"
+  tags   = local.tags
 }
-
-# Reuse the *same ALB* created by pgAdmin module ("pgadmin-alb")
-data "aws_lb" "shared_alb" {
-  name = "pgadmin-alb"
+module "ecr_web" {
+  source = "../APP-modules/ecr"
+  name   = "${local.app_name}-web"
+  tags   = local.tags
 }
-
-# Get the HTTP(80) listener on shared ALB
-data "aws_lb_listener" "http" {
-  load_balancer_arn = data.aws_lb.shared_alb.arn
-  port              = 80
+module "ecr_db" {
+  source = "../APP-modules/ecr"
+  name   = "${local.app_name}-db"
+  tags   = local.tags
+}
+module "ecr_search" {
+  source = "../APP-modules/ecr"
+  name   = "${local.app_name}-search"
+  tags   = local.tags
 }
 
 ############################
-# IAM (execution / task)   #
+# IAM roles
 ############################
 module "iam" {
   source = "../APP-modules/iam"
@@ -588,9 +852,8 @@ module "iam" {
 }
 
 ############################
-# Security Groups (ECS)    #
+# Security Group (for tasks)
 ############################
-# We expose only WEB (3000) through ALB; the rest are local to the task
 module "security_groups" {
   source         = "../APP-modules/security_groups"
   name           = local.app_name
@@ -600,21 +863,21 @@ module "security_groups" {
 }
 
 ############################
-# Secrets (DB creds)       #
+# Secrets (DB creds)
 ############################
 resource "random_string" "suffix" {
   length  = 5
   special = false
 }
 
-resource "aws_secretsmanager_secret" "marquez_db" {
+resource "aws_secretsmanager_secret" "db" {
   name        = "${local.app_name}-db-${random_string.suffix.result}"
   description = "Credentials for Marquez Postgres"
   tags        = local.tags
 }
 
-resource "aws_secretsmanager_secret_version" "marquez_db" {
-  secret_id     = aws_secretsmanager_secret.marquez_db.id
+resource "aws_secretsmanager_secret_version" "db" {
+  secret_id = aws_secretsmanager_secret.db.id
   secret_string = jsonencode({
     POSTGRES_USER     = var.marquez_db_user
     POSTGRES_PASSWORD = var.marquez_db_password
@@ -623,19 +886,18 @@ resource "aws_secretsmanager_secret_version" "marquez_db" {
 }
 
 ############################
-# CloudWatch Logs          #
+# Logs (split per app)
 ############################
-resource "aws_cloudwatch_log_group" "ecs" {
+resource "aws_cloudwatch_log_group" "app" {
   name              = "/ecs/${local.app_name}"
   retention_in_days = 14
   tags              = local.tags
 }
 
 ############################
-# Target group + rule      #
+# Target Group + ALB Rule
 ############################
-# Target Group for Marquez WEB (port 3000)
-resource "aws_lb_target_group" "marquez" {
+resource "aws_lb_target_group" "web" {
   name        = "${local.app_name}-tg"
   port        = 3000
   protocol    = "HTTP"
@@ -655,14 +917,13 @@ resource "aws_lb_target_group" "marquez" {
   tags = merge(local.tags, { Name = "${local.app_name}-tg" })
 }
 
-# Path-based rule on existing ALB listener → forwards /marquez/* to Marquez TG
-resource "aws_lb_listener_rule" "marquez" {
-  listener_arn = data.aws_lb_listener.http.arn
-  priority     = 50
+resource "aws_lb_listener_rule" "web" {
+  listener_arn = data.terraform_remote_state.infra.outputs.alb_listener_arn_80
+  priority     = 20
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.marquez.arn
+    target_group_arn = aws_lb_target_group.web.arn
   }
 
   condition {
@@ -675,10 +936,9 @@ resource "aws_lb_listener_rule" "marquez" {
 }
 
 ############################
-# Task Definition (4 ctrs) #
+# Task Definition (4 containers)
 ############################
-# One shared EFS volume, mounted to subpaths for db/search if needed.
-resource "aws_ecs_task_definition" "marquez" {
+resource "aws_ecs_task_definition" "app" {
   family                   = "${local.app_name}-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -691,20 +951,19 @@ resource "aws_ecs_task_definition" "marquez" {
     # ---------- WEB ----------
     {
       name      = "web"
-      image     = "marquezproject/marquez-web:${var.image_tag_web}"
+      image     = "${module.ecr_web.repository_url}:${var.image_tag_web}"
       essential = true
       portMappings = [
         { containerPort = 3000, hostPort = 3000, protocol = "tcp" }
       ]
       environment = [
-        # API runs in same task on port 5000
         { name = "API_URL", value = "http://127.0.0.1:5000" }
       ]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs.name
-          awslogs-region        = var.region
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = data.terraform_remote_state.infra.outputs.region
           awslogs-stream-prefix = "web"
         }
       }
@@ -713,27 +972,27 @@ resource "aws_ecs_task_definition" "marquez" {
     # ---------- API ----------
     {
       name      = "api"
-      image     = "marquezproject/marquez:${var.image_tag_api}"
+      image     = "${module.ecr_api.repository_url}:${var.image_tag_api}"
       essential = true
       portMappings = [
         { containerPort = 5000, hostPort = 5000, protocol = "tcp" },
         { containerPort = 5001, hostPort = 5001, protocol = "tcp" }
       ]
       dependsOn = [
-        { containerName = "db",     condition = "START" },
+        { containerName = "db", condition = "START" },
         { containerName = "search", condition = "START" }
       ]
       environment = [
-        { name = "MARQUEZ_PORT",       value = "5000" },
+        { name = "MARQUEZ_PORT", value = "5000" },
         { name = "MARQUEZ_ADMIN_PORT", value = "5001" },
-        { name = "SEARCH_ENABLED",     value = "true" },
-        { name = "POSTGRES_HOST",      value = "127.0.0.1" },
-        { name = "POSTGRES_PORT",      value = "5432" },
+        { name = "SEARCH_ENABLED", value = "true" },
+        { name = "POSTGRES_HOST", value = "127.0.0.1" },
+        { name = "POSTGRES_PORT", value = "5432" }
       ]
       secrets = [
-        { name = "POSTGRES_USER",     valueFrom = "${aws_secretsmanager_secret.marquez_db.arn}:POSTGRES_USER::" },
-        { name = "POSTGRES_PASSWORD", valueFrom = "${aws_secretsmanager_secret.marquez_db.arn}:POSTGRES_PASSWORD::" },
-        { name = "MARQUEZ_DB",        valueFrom = "${aws_secretsmanager_secret.marquez_db.arn}:POSTGRES_DB::" }
+        { name = "POSTGRES_USER", valueFrom = "${aws_secretsmanager_secret.db.arn}:POSTGRES_USER::" },
+        { name = "POSTGRES_PASSWORD", valueFrom = "${aws_secretsmanager_secret.db.arn}:POSTGRES_PASSWORD::" },
+        { name = "MARQUEZ_DB", valueFrom = "${aws_secretsmanager_secret.db.arn}:POSTGRES_DB::" }
       ]
       mountPoints = [
         { sourceVolume = "efs-volume", containerPath = "/opt/marquez", readOnly = false }
@@ -741,8 +1000,8 @@ resource "aws_ecs_task_definition" "marquez" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs.name
-          awslogs-region        = var.region
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = data.terraform_remote_state.infra.outputs.region
           awslogs-stream-prefix = "api"
         }
       }
@@ -751,12 +1010,12 @@ resource "aws_ecs_task_definition" "marquez" {
     # ---------- DB (Postgres) ----------
     {
       name      = "db"
-      image     = "postgres:${var.image_tag_db}"
+      image     = "${module.ecr_db.repository_url}:${var.image_tag_db}"
       essential = true
       environment = [
-        { name = "POSTGRES_USER",     value = var.marquez_db_user },
+        { name = "POSTGRES_USER", value = var.marquez_db_user },
         { name = "POSTGRES_PASSWORD", value = var.marquez_db_password },
-        { name = "POSTGRES_DB",       value = var.marquez_db_name }
+        { name = "POSTGRES_DB", value = var.marquez_db_name }
       ]
       portMappings = [
         { containerPort = 5432, hostPort = 5432, protocol = "tcp" }
@@ -767,8 +1026,8 @@ resource "aws_ecs_task_definition" "marquez" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs.name
-          awslogs-region        = var.region
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = data.terraform_remote_state.infra.outputs.region
           awslogs-stream-prefix = "db"
         }
       }
@@ -777,14 +1036,11 @@ resource "aws_ecs_task_definition" "marquez" {
     # ---------- OpenSearch ----------
     {
       name      = "search"
-      image     = "opensearchproject/opensearch:${var.image_tag_search}"
+      image     = "${module.ecr_search.repository_url}:${var.image_tag_search}"
       essential = true
       environment = [
-        { name = "discovery.type",      value = "single-node" },
+        { name = "discovery.type", value = "single-node" },
         { name = "plugins.security.disabled", value = "true" }
-      ]
-      ulimits = [
-        { name = "nofile", softLimit = 65536, hardLimit = 65536 }
       ]
       portMappings = [
         { containerPort = 9200, hostPort = 9200, protocol = "tcp" },
@@ -796,12 +1052,11 @@ resource "aws_ecs_task_definition" "marquez" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.ecs.name
-          awslogs-region        = var.region
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = data.terraform_remote_state.infra.outputs.region
           awslogs-stream-prefix = "search"
         }
       }
-      # OpenSearch needs extra memory; ensure task_memory is sized appropriately.
     }
   ])
 
@@ -811,7 +1066,6 @@ resource "aws_ecs_task_definition" "marquez" {
       file_system_id     = data.terraform_remote_state.infra.outputs.efs_id
       transit_encryption = "ENABLED"
       authorization_config {
-        # Use the "marquez" EFS access point from shared infra
         access_point_id = data.terraform_remote_state.infra.outputs.efs_access_points["marquez"]
       }
     }
@@ -821,12 +1075,12 @@ resource "aws_ecs_task_definition" "marquez" {
 }
 
 ############################
-# Service (attach to ALB)  #
+# Service (shared cluster)
 ############################
-resource "aws_ecs_service" "marquez" {
+resource "aws_ecs_service" "app" {
   name            = "${local.app_name}-service"
-  cluster         = data.aws_ecs_cluster.shared.arn
-  task_definition = aws_ecs_task_definition.marquez.arn
+  cluster         = data.terraform_remote_state.infra.outputs.ecs_cluster_name
+  task_definition = aws_ecs_task_definition.app.arn
   desired_count   = 1
   launch_type     = "FARGATE"
 
@@ -836,16 +1090,13 @@ resource "aws_ecs_service" "marquez" {
     security_groups  = [module.security_groups.ecs_sg_id]
   }
 
-  # Attach WEB container to ALB target group
   load_balancer {
-    target_group_arn = aws_lb_target_group.marquez.arn
+    target_group_arn = aws_lb_target_group.web.arn
     container_name   = "web"
     container_port   = 3000
   }
 
-  deployment_controller {
-    type = "ECS"
-  }
+  deployment_controller { type = "ECS" }
 
   deployment_circuit_breaker {
     enable   = true
@@ -858,14 +1109,19 @@ resource "aws_ecs_service" "marquez" {
 }
 
 ### marquez/outputs.tf ###
-output "alb_dns_name" {
-  description = "Shared ALB DNS name"
-  value       = data.aws_lb.shared_alb.dns_name
+output "marquez_alb_dns" {
+  description = "ALB DNS name for Marquez"
+  value       = data.terraform_remote_state.infra.outputs.alb_dns_name
 }
 
-output "service_name" {
-  value       = aws_ecs_service.marquez.name
+output "marquez_service_name" {
   description = "ECS service name for Marquez"
+  value       = aws_ecs_service.app.name
+}
+
+output "marquez_url" {
+  description = "Open Marquez web UI in browser"
+  value       = "http://${data.terraform_remote_state.infra.outputs.alb_dns_name}/marquez/"
 }
 
 ### marquez/variables.tf ###
@@ -878,25 +1134,25 @@ variable "region" {
 # Image tags (use Docker Hub images unless you build/push your own to ECR)
 variable "image_tag_api" {
   type        = string
-  default     = "0.50.0"
+  default     = "latest"
   description = "Tag for marquezproject/marquez (API)"
 }
 
 variable "image_tag_web" {
   type        = string
-  default     = "0.50.0"
+  default     = "latest"
   description = "Tag for marquezproject/marquez-web (WEB)"
 }
 
 variable "image_tag_db" {
   type        = string
-  default     = "14"
+  default     = "latest"
   description = "Tag for postgres"
 }
 
 variable "image_tag_search" {
   type        = string
-  default     = "2.5.0"
+  default     = "latest"
   description = "Tag for opensearchproject/opensearch"
 }
 
@@ -928,16 +1184,16 @@ variable "alb_path_prefix" {
 
 # Task size (all 4 containers in one task)
 variable "task_cpu" {
-  type        = string
-  default     = "2048"
+  type    = string
+  default = "2048"
 }
 variable "task_memory" {
-  type        = string
-  default     = "4096"
+  type    = string
+  default = "4096"
 }
 
 ### marquez/terraform.tfvars ###
-region  = "us-east-1"
+region = "us-east-1"
 
 marquez_db_user     = "marquez"
 marquez_db_password = "marquezpassword"

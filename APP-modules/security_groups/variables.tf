@@ -9,10 +9,10 @@ variable "vpc_id" {
   description = "VPC ID"
 }
 
-variable "container_port" {
-  type        = number
-  description = "Port where ECS containers listen"
-  default     = 80
+variable "container_ports" {  # Changed from container_port to container_ports
+  type        = list(number)
+  default     = [80]
+  description = "List of ports where ECS containers listen"
 }
 
 variable "tags" {

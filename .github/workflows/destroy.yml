@@ -4,7 +4,28 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  destroy-marquez:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marquez
+    env:
+      TF_VAR_marquez_db_user:     ${{ secrets.MARQUEZ_DB_USER }}
+      TF_VAR_marquez_db_password: ${{ secrets.MARQUEZ_DB_PASSWORD }}
+      TF_VAR_marquez_db_name:     ${{ vars.MARQUEZ_DB_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform destroy -auto-approve
+
   destroy-pgadmin:
+    needs: destroy-marquez
     runs-on: ubuntu-latest
     defaults:
       run:

@@ -1,9 +1,14 @@
 output "pgadmin_alb_dns" {
-  value       = module.alb.alb_dns_name
-  description = "DNS name of the pgAdmin ALB"
+  description = "ALB DNS name for pgAdmin"
+  value       = data.terraform_remote_state.infra.outputs.alb_dns_name
 }
 
 output "pgadmin_service_name" {
-  value       = module.ecs.ecs_service_name
-  description = "Name of ECS service for pgAdmin"
+  description = "ECS service name for pgAdmin"
+  value       = aws_ecs_service.app.name
+}
+
+output "pgadmin_url" {
+  description = "Open pgAdmin in browser"
+  value       = "http://${data.terraform_remote_state.infra.outputs.alb_dns_name}/"
 }

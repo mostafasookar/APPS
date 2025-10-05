@@ -1,4 +1,6 @@
-# Import shared infra (terraform/ state)
+############################
+# Bring shared outputs
+############################
 data "terraform_remote_state" "infra" {
   backend = "s3"
   config = {
@@ -8,30 +10,38 @@ data "terraform_remote_state" "infra" {
   }
 }
 
-# ECR Repo
+############################
+# ECR (one repo for pgAdmin)
+############################
 module "ecr" {
   source = "../APP-modules/ecr"
   name   = local.app_name
   tags   = local.tags
 }
 
-# IAM Roles
+############################
+# IAM roles
+############################
 module "iam" {
   source = "../APP-modules/iam"
   name   = local.app_name
   tags   = local.tags
 }
 
-# Security Groups
+############################
+# Security Group (for tasks)
+############################
 module "security_groups" {
-  source         = "../APP-modules/security_groups"
-  name           = local.app_name
-  vpc_id         = var.vpc_id
-  container_port = 80
-  tags           = local.tags
+  source          = "../APP-modules/security_groups"
+  name            = local.app_name
+  vpc_id          = data.terraform_remote_state.infra.outputs.vpc_id
+  container_ports = [80] # Changed from container_port = 80 to container_ports = [80]
+  tags            = local.tags
 }
 
-# Secrets
+############################
+# Secrets for login
+############################
 module "secrets" {
   source           = "../APP-modules/secrets"
   name             = local.app_name
@@ -40,57 +50,141 @@ module "secrets" {
   tags             = local.tags
 }
 
-# ALB
-module "alb" {
-  source            = "../APP-modules/alb"
-  name              = local.app_name
-  vpc_id            = var.vpc_id
-  public_subnet_ids = var.public_subnet_ids
-  sg_id             = module.security_groups.ecs_sg_id
-  container_port    = 80
+############################
+# Logs (split per app)
+############################
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${local.app_name}"
+  retention_in_days = 14
   tags              = local.tags
 }
 
-# ECS
-module "ecs" {
-  source               = "../APP-modules/ecs"
-  name                 = local.app_name
-  execution_role_arn   = module.iam.execution_role_arn
-  task_role_arn        = module.iam.task_role_arn
-  ecr_repo_url         = module.ecr.repository_url
-  image_tag            = var.image_tag
-  efs_id               = data.terraform_remote_state.infra.outputs.efs_id
-  efs_access_point_id  = data.terraform_remote_state.infra.outputs.efs_access_points[local.app_name]
-  ecs_sg_id            = module.security_groups.ecs_sg_id
-  alb_target_group_arn = module.alb.target_group_arn
-  private_subnet_ids   = var.private_subnet_ids
-  public_subnet_ids    = var.public_subnet_ids
-  pgadmin_secret_arn   = module.secrets.pgadmin_secret_arn
-  region               = var.region
-  tags                 = local.tags
+############################
+# Target Group + ALB Rule
+############################
+resource "aws_lb_target_group" "app" {
+  name        = "${local.app_name}-tg"
+  port        = 80
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = data.terraform_remote_state.infra.outputs.vpc_id
+
+  health_check {
+    path                = "/misc/ping"
+    protocol            = "HTTP"
+    matcher             = "200-499"
+    interval            = 30
+    timeout             = 10
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  tags = merge(local.tags, { Name = "${local.app_name}-tg" })
 }
 
-# Autoscaling
-module "pgadmin_autoscaling" {
-  source              = "../APP-modules/autoscaling"
-  name                = local.app_name
-  cluster_name        = module.ecs.ecs_cluster_name
-  service_name        = module.ecs.ecs_service_name
-  min_capacity        = 1
-  max_capacity        = 3
-  cpu_target_value    = 70
-  memory_target_value = 75
-  tags                = local.tags
+resource "aws_lb_listener_rule" "app" {
+  listener_arn = data.terraform_remote_state.infra.outputs.alb_listener_arn_80
+  priority     = 10
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/*"]
+    }
+  }
+
+  tags = local.tags
 }
 
-# CloudWatch
-module "pgadmin_cloudwatch" {
-  source                 = "../APP-modules/cloudwatch"
-  name                   = local.app_name
-  cluster_name           = module.ecs.ecs_cluster_name
-  service_name           = module.ecs.ecs_service_name
-  alert_email            = var.alert_email
-  cpu_alarm_threshold    = 80
-  memory_alarm_threshold = 85
-  tags                   = local.tags
+############################
+# Task Definition
+############################
+resource "aws_ecs_task_definition" "app" {
+  family                   = "${local.app_name}-task"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = module.iam.execution_role_arn
+  task_role_arn            = module.iam.task_role_arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "pgadmin"
+      image     = "${module.ecr.repository_url}:${var.image_tag}"
+      essential = true
+      portMappings = [
+        { containerPort = 80, hostPort = 80, protocol = "tcp" }
+      ]
+      mountPoints = [
+        { sourceVolume = "efs-volume", containerPath = "/var/lib/pgadmin", readOnly = false }
+      ]
+      secrets = [
+        { name = "PGADMIN_DEFAULT_EMAIL", valueFrom = "${module.secrets.pgadmin_secret_arn}:PGADMIN_DEFAULT_EMAIL::" },
+        { name = "PGADMIN_DEFAULT_PASSWORD", valueFrom = "${module.secrets.pgadmin_secret_arn}:PGADMIN_DEFAULT_PASSWORD::" }
+      ]
+      environment = [
+        { name = "PGADMIN_LISTEN_PORT", value = "80" }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.app.name
+          awslogs-region        = data.terraform_remote_state.infra.outputs.region
+          awslogs-stream-prefix = "pgadmin"
+        }
+      }
+    }
+  ])
+
+  volume {
+    name = "efs-volume"
+    efs_volume_configuration {
+      file_system_id     = data.terraform_remote_state.infra.outputs.efs_id
+      transit_encryption = "ENABLED"
+      authorization_config {
+        access_point_id = data.terraform_remote_state.infra.outputs.efs_access_points["pgadmin"]
+      }
+    }
+  }
+
+  tags = local.tags
+}
+
+############################
+# Service (shared cluster)
+############################
+resource "aws_ecs_service" "app" {
+  name            = "${local.app_name}-service"
+  cluster         = data.terraform_remote_state.infra.outputs.ecs_cluster_name
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = data.terraform_remote_state.infra.outputs.private_subnet_ids
+    assign_public_ip = false
+    security_groups  = [module.security_groups.ecs_sg_id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = "pgadmin"
+    container_port   = 80
+  }
+
+  deployment_controller { type = "ECS" }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  enable_execute_command = true
+
+  tags = local.tags
 }
