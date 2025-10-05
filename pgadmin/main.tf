@@ -84,7 +84,7 @@ resource "aws_lb_target_group" "app" {
 
 resource "aws_lb_listener_rule" "app" {
   listener_arn = data.terraform_remote_state.infra.outputs.alb_listener_arn_80
-  priority     = 10
+  priority     = 100
 
   action {
     type             = "forward"
