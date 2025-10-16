@@ -10,7 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  # --- Shared ---
+  # -----------------------------
+  # SHARED ENVIRONMENT
+  # -----------------------------
   plan-shared:
     runs-on: ubuntu-latest
     defaults:
@@ -26,6 +28,11 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
       - run: terraform plan -out=tfplan
+      - name: Upload tfplan
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-tfplan
+          path: terraform/tfplan
 
   approve-shared-apply:
     needs: plan-shared
@@ -53,10 +60,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
       - uses: hashicorp/setup-terraform@v3
+      - name: Download tfplan
+        uses: actions/download-artifact@v4
+        with:
+          name: shared-tfplan
+          path: terraform
       - run: terraform init
       - run: terraform apply -auto-approve tfplan
 
-  # --- PgAdmin ---
+  # -----------------------------
+  # PGADMIN ENVIRONMENT
+  # -----------------------------
   plan-pgadmin:
     needs: apply-shared
     runs-on: ubuntu-latest
@@ -77,6 +91,11 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
       - run: terraform plan -out=tfplan
+      - name: Upload tfplan
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgadmin-tfplan
+          path: pgadmin/tfplan
 
   approve-pgadmin-apply:
     needs: plan-pgadmin
@@ -96,6 +115,10 @@ jobs:
     defaults:
       run:
         working-directory: pgadmin
+    env:
+      TF_VAR_pgadmin_email: ${{ secrets.PGADMIN_EMAIL }}
+      TF_VAR_pgadmin_password: ${{ secrets.PGADMIN_PASSWORD }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -104,10 +127,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
       - uses: hashicorp/setup-terraform@v3
+      - name: Download tfplan
+        uses: actions/download-artifact@v4
+        with:
+          name: pgadmin-tfplan
+          path: pgadmin
       - run: terraform init
       - run: terraform apply -auto-approve tfplan
 
-  # --- Marquez ---
+  # -----------------------------
+  # MARQUEZ ENVIRONMENT
+  # -----------------------------
   plan-marquez:
     needs: apply-pgadmin
     runs-on: ubuntu-latest
@@ -128,6 +158,11 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
       - run: terraform plan -out=tfplan
+      - name: Upload tfplan
+        uses: actions/upload-artifact@v4
+        with:
+          name: marquez-tfplan
+          path: marquez/tfplan
 
   approve-marquez-apply:
     needs: plan-marquez
@@ -147,6 +182,10 @@ jobs:
     defaults:
       run:
         working-directory: marquez
+    env:
+      TF_VAR_marquez_db_user:     ${{ secrets.MARQUEZ_DB_USER }}
+      TF_VAR_marquez_db_password: ${{ secrets.MARQUEZ_DB_PASSWORD }}
+      TF_VAR_marquez_db_name:     ${{ vars.MARQUEZ_DB_NAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -155,5 +194,10 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
       - uses: hashicorp/setup-terraform@v3
+      - name: Download tfplan
+        uses: actions/download-artifact@v4
+        with:
+          name: marquez-tfplan
+          path: marquez
       - run: terraform init
       - run: terraform apply -auto-approve tfplan
