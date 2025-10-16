@@ -5,6 +5,10 @@ on:
     branches: [ "main" ]
   workflow_dispatch: {}
 
+permissions:
+  issues: write
+  contents: read
+
 jobs:
   deploy-shared:
     runs-on: ubuntu-latest
@@ -21,10 +25,31 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
       - run: terraform plan -out=tfplan
+
+      - name: Approve before apply (shared)
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve shared apply"
+
       - run: terraform apply -auto-approve tfplan
 
-  deploy-pgadmin:
+  approve-deploy-pgadmin:
     needs: deploy-shared
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve before pgadmin deploy
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve pgadmin deploy"
+
+  deploy-pgadmin:
+    needs: approve-deploy-pgadmin
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,10 +68,31 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
       - run: terraform plan -out=tfplan
+
+      - name: Approve before apply (pgadmin)
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve pgadmin apply"
+
       - run: terraform apply -auto-approve tfplan
 
-  deploy-marquez:
+  approve-deploy-marquez:
     needs: deploy-pgadmin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve before marquez deploy
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve marquez deploy"
+
+  deploy-marquez:
+    needs: approve-deploy-marquez
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -65,4 +111,13 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
       - run: terraform plan -out=tfplan
+
+      - name: Approve before apply (marquez)
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve marquez apply"
+
       - run: terraform apply -auto-approve tfplan

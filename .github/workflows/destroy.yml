@@ -4,8 +4,8 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  issues: write        # Needed for trstringer/manual-approval to create approval issues
-  contents: read       # Default repo access
+  issues: write
+  contents: read
 
 jobs:
   destroy-marquez:
@@ -26,7 +26,17 @@ jobs:
           aws-region: us-east-1
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
-      - run: terraform destroy -auto-approve
+      - run: terraform plan -destroy -out=tfplan
+
+      - name: Approve before destroy (marquez)
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve marquez destroy"
+
+      - run: terraform apply -auto-approve tfplan
 
   approve-destroy-pgadmin:
     needs: destroy-marquez
@@ -59,7 +69,17 @@ jobs:
           aws-region: us-east-1
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
-      - run: terraform destroy -auto-approve
+      - run: terraform plan -destroy -out=tfplan
+
+      - name: Approve before destroy (pgadmin)
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve pgadmin destroy apply"
+
+      - run: terraform apply -auto-approve tfplan
 
   approve-destroy-shared:
     needs: destroy-pgadmin
@@ -88,4 +108,14 @@ jobs:
           aws-region: us-east-1
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init
-      - run: terraform destroy -auto-approve
+      - run: terraform plan -destroy -out=tfplan
+
+      - name: Approve before destroy (shared)
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: mostafasookar
+          minimum-approvals: 1
+          issue-title: "Approve shared destroy apply"
+
+      - run: terraform apply -auto-approve tfplan
