@@ -24,8 +24,20 @@ jobs:
       - run: terraform init
       - run: terraform destroy -auto-approve
 
-  destroy-pgadmin:
+  approve-destroy-pgadmin:
     needs: destroy-marquez
+    runs-on: ubuntu-latest
+    steps:
+      - name: Manual approval before pgadmin destroy
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: moustafa
+          minimum-approvals: 1
+          issue-title: "Approve pgadmin destroy"
+
+  destroy-pgadmin:
+    needs: approve-destroy-pgadmin
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -45,8 +57,20 @@ jobs:
       - run: terraform init
       - run: terraform destroy -auto-approve
 
-  destroy-shared:
+  approve-destroy-shared:
     needs: destroy-pgadmin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Manual approval before shared destroy
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.token }}
+          approvers: moustafa
+          minimum-approvals: 1
+          issue-title: "Approve shared destroy"
+
+  destroy-shared:
+    needs: approve-destroy-shared
     runs-on: ubuntu-latest
     defaults:
       run:
