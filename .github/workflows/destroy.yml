@@ -36,7 +36,7 @@ jobs:
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.token }}
-          approvers: moustafa
+          approvers: mostafasookar
           minimum-approvals: 1
           issue-title: "Approve pgadmin destroy"
 
@@ -69,7 +69,7 @@ jobs:
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ github.token }}
-          approvers: moustafa
+          approvers: mostafasookar
           minimum-approvals: 1
           issue-title: "Approve shared destroy"
 
