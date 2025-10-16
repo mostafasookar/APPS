@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  deploy-shared:
+  # --- Shared ---
+  plan-shared:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,6 +27,10 @@ jobs:
       - run: terraform init
       - run: terraform plan -out=tfplan
 
+  approve-shared-apply:
+    needs: plan-shared
+    runs-on: ubuntu-latest
+    steps:
       - name: Approve before apply (shared)
         uses: trstringer/manual-approval@v1
         with:
@@ -34,22 +39,26 @@ jobs:
           minimum-approvals: 1
           issue-title: "Approve shared apply"
 
+  apply-shared:
+    needs: approve-shared-apply
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
       - run: terraform apply -auto-approve tfplan
 
-  approve-deploy-pgadmin:
-    needs: deploy-shared
-    runs-on: ubuntu-latest
-    steps:
-      - name: Approve before pgadmin deploy
-        uses: trstringer/manual-approval@v1
-        with:
-          secret: ${{ github.token }}
-          approvers: mostafasookar
-          minimum-approvals: 1
-          issue-title: "Approve pgadmin deploy"
-
-  deploy-pgadmin:
-    needs: approve-deploy-pgadmin
+  # --- PgAdmin ---
+  plan-pgadmin:
+    needs: apply-shared
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -69,6 +78,10 @@ jobs:
       - run: terraform init
       - run: terraform plan -out=tfplan
 
+  approve-pgadmin-apply:
+    needs: plan-pgadmin
+    runs-on: ubuntu-latest
+    steps:
       - name: Approve before apply (pgadmin)
         uses: trstringer/manual-approval@v1
         with:
@@ -77,22 +90,26 @@ jobs:
           minimum-approvals: 1
           issue-title: "Approve pgadmin apply"
 
+  apply-pgadmin:
+    needs: approve-pgadmin-apply
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pgadmin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
       - run: terraform apply -auto-approve tfplan
 
-  approve-deploy-marquez:
-    needs: deploy-pgadmin
-    runs-on: ubuntu-latest
-    steps:
-      - name: Approve before marquez deploy
-        uses: trstringer/manual-approval@v1
-        with:
-          secret: ${{ github.token }}
-          approvers: mostafasookar
-          minimum-approvals: 1
-          issue-title: "Approve marquez deploy"
-
-  deploy-marquez:
-    needs: approve-deploy-marquez
+  # --- Marquez ---
+  plan-marquez:
+    needs: apply-pgadmin
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -112,6 +129,10 @@ jobs:
       - run: terraform init
       - run: terraform plan -out=tfplan
 
+  approve-marquez-apply:
+    needs: plan-marquez
+    runs-on: ubuntu-latest
+    steps:
       - name: Approve before apply (marquez)
         uses: trstringer/manual-approval@v1
         with:
@@ -120,4 +141,19 @@ jobs:
           minimum-approvals: 1
           issue-title: "Approve marquez apply"
 
+  apply-marquez:
+    needs: approve-marquez-apply
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marquez
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
       - run: terraform apply -auto-approve tfplan
