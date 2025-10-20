@@ -133,14 +133,14 @@ module "glue_role" {
 module "glue_jobs" {
   source = "../APP-modules/glue-jobs"
 
-  scripts_bucket = var.scripts_bucket
+  scripts_bucket = "glue-sokar-test"
   role_arn       = module.glue_role.glue_role_arn
   glue_version   = "5.0"
   python_version = "3"
   command_name   = "glueetl"
 
   default_arguments = {
-    "--TempDir"             = "s3://${var.scripts_bucket}/temp/"
+    "--TempDir"             = "s3://glue-sokar-test/temp/"
     "--enable-metrics"      = "true"
     "--enable-job-insights" = "true"
   }

@@ -35,8 +35,3 @@ variable "private_route_table_ids" {
   default     = ["rtb-04eae072f5cad1ef9"]
   description = "Private route table IDs for VPC Endpoints"
 }
-
-variable "scripts_bucket" {
-  description = "S3 bucket name for Glue job scripts"
-  type        = string
-}
