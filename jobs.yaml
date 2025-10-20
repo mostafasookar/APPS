@@ -2,3 +2,9 @@
   script_file: glue-scripts/test-job/main.py
   worker_type: G.1X
   number_of_workers: 2
+
+- name: sales-report-job                # 👈 new job name
+  script_file: glue-scripts/sales-report/main.py
+  worker_type: G.1X
+  number_of_workers: 2
+  

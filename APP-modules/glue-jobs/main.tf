@@ -1,10 +1,3 @@
-terraform {
-  required_providers {
-    aws     = { source = "hashicorp/aws", version = ">= 5.0" }
-    archive = { source = "hashicorp/archive", version = ">= 2.4.0" }
-  }
-}
-
 locals {
   jobs = yamldecode(file("${path.cwd}/../jobs.yaml"))
 }
@@ -13,10 +6,9 @@ locals {
 resource "aws_s3_object" "scripts" {
   for_each = { for j in local.jobs : j.name => j }
 
-  bucket = var.scripts_bucket
+  bucket = "glue-sokar-test"   # ✅ hardcoded bucket name
   key    = "scripts/${each.key}.py"
 
-  # fix the path: go up one folder (out of terraform/)
   source = "${path.cwd}/../${each.value.script_file}"
   etag   = filemd5("${path.cwd}/../${each.value.script_file}")
 }
@@ -27,7 +19,7 @@ module "glue_jobs" {
   source   = "../glue-job"
 
   job_name          = each.value.name
-  script_location   = "s3://${var.scripts_bucket}/scripts/${each.key}.py"
+  script_location   = "s3://glue-sokar-test/scripts/${each.key}.py"  
   worker_type       = each.value.worker_type
   number_of_workers = each.value.number_of_workers
   role_arn          = var.role_arn
