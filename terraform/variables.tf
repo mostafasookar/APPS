@@ -37,7 +37,6 @@ variable "private_route_table_ids" {
 }
 
 variable "scripts_bucket" {
-  description = "Existing S3 bucket for Glue scripts"
+  description = "S3 bucket name for Glue job scripts"
   type        = string
-  default     = "glue-sokar-test"
 }
