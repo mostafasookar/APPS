@@ -6,7 +6,7 @@ terraform {
 }
 
 locals {
-  jobs = yamldecode(file("${path.cwd}/jobs.yaml"))
+  jobs = yamldecode(file("${path.cwd}/../jobs.yaml"))
 }
 
 # Upload each job script to S3
