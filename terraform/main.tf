@@ -133,11 +133,11 @@ module "glue_role" {
 module "glue_jobs" {
   source = "../APP-modules/glue-jobs"
 
-  scripts_bucket    = var.scripts_bucket
-  role_arn          = module.glue_role.glue_role_arn
-  glue_version      = "5.0"
-  python_version    = "3"
-  command_name      = "glueetl"
+  scripts_bucket = var.scripts_bucket
+  role_arn       = module.glue_role.glue_role_arn
+  glue_version   = "5.0"
+  python_version = "3"
+  command_name   = "glueetl"
 
   default_arguments = {
     "--TempDir"             = "s3://${var.scripts_bucket}/temp/"
