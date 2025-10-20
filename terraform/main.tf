@@ -119,3 +119,35 @@ module "vpc_endpoints" {
   private_route_table_ids = var.private_route_table_ids
   tags                    = local.tags
 }
+
+############################
+# GLUE ROLE
+############################
+module "glue_role" {
+  source = "../APP-modules/glue-role"
+}
+
+############################
+# GLUE JOBS
+############################
+module "glue_jobs" {
+  source = "../APP-modules/glue-jobs"
+
+  scripts_bucket   = "your-existing-bucket-name"  # replace with your real bucket
+  role_arn         = module.glue_role.glue_role_arn
+  glue_version     = "5.0"
+  python_version   = "3"
+  command_name     = "glueetl"
+
+  default_arguments = {
+    "--enable-metrics"      = "true"
+    "--enable-job-insights" = "true"
+    "--TempDir"             = "s3://glue-sokar-test/temp/"
+  }
+
+  tags = {
+    Environment = "dev"
+    Owner       = "Moustafa"
+    ManagedBy   = "Terraform"
+  }
+}

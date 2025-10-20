@@ -1,0 +1,10 @@
+variable "job_name" {}
+variable "script_location" {}
+variable "worker_type" {}
+variable "number_of_workers" {}
+variable "role_arn" {}
+variable "default_arguments" {}
+variable "glue_version" {}
+variable "python_version" {}
+variable "command_name" {}
+variable "tags" {}

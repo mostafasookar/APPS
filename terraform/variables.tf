@@ -35,3 +35,9 @@ variable "private_route_table_ids" {
   default     = ["rtb-04eae072f5cad1ef9"]
   description = "Private route table IDs for VPC Endpoints"
 }
+
+variable "scripts_bucket" {
+  description = "Existing S3 bucket for Glue scripts"
+  type        = string
+  default     = "glue-sokar-test"
+}
