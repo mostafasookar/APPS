@@ -15,8 +15,10 @@ resource "aws_s3_object" "scripts" {
 
   bucket = var.scripts_bucket
   key    = "scripts/${each.key}.py"
-  source = "${path.root}/${each.value.script_file}"
-  etag   = filemd5("${path.root}/${each.value.script_file}")
+
+  # fix the path: go up one folder (out of terraform/)
+  source = "${path.cwd}/../${each.value.script_file}"
+  etag   = filemd5("${path.cwd}/../${each.value.script_file}")
 }
 
 # Create Glue job for each entry
