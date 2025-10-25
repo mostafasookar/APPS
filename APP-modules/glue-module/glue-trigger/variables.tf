@@ -1,15 +1,18 @@
+# Variables for Glue Trigger Module
+
 variable "jobs" {
-  description = "List of Glue jobs with trigger configs"
-  type        = list(any)
+  description = "List of Glue jobs (with trigger details if applicable)"
+  # was: list(any)
+  type        = list(map(any))
 }
 
 variable "dependency_modules" {
-  description = "Dependent modules (e.g., glue-manager)"
+  description = "Dependencies that must exist before creating triggers (e.g., glue-manager)"
   type        = any
 }
 
 variable "tags" {
-  description = "Default tags for triggers"
+  description = "Default organizational tags for triggers"
   type        = map(string)
   default = {
     ApplicationName     = "CDFundamentals"
