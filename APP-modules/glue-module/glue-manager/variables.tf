@@ -3,7 +3,7 @@
 variable "jobs" {
   description = "List of Glue jobs (merged from YAML)"
   # was: list(any)
-  type        = list(map(any))
+  type        = list(any)
 }
 
 variable "scripts_root" {

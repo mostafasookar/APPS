@@ -3,7 +3,7 @@
 variable "jobs" {
   description = "List of Glue jobs (with trigger details if applicable)"
   # was: list(any)
-  type        = list(map(any))
+  type        = list(any)
 }
 
 variable "dependency_modules" {
