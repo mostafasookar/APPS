@@ -90,23 +90,3 @@ data "aws_iam_policy_document" "codedeploy_assume" {
 }
 
 
-=====
-DB=/var/lib/pgadmin/pgadmin4.db
-ADMIN_EMAIL="Dataplatform@adcb.com"
-
-python3 - <<'PY'
-import sqlite3, os
-db = os.environ["DB"]
-email = os.environ["ADMIN_EMAIL"]
-
-con = sqlite3.connect(db)
-cur = con.cursor()
-cur.execute("UPDATE user SET locked=0, login_attempts=0 WHERE email=?", (email,))
-con.commit()
-
-cur.execute("SELECT id,email,locked,login_attempts,active FROM user WHERE email=?", (email,))
-print(cur.fetchone())
-
-con.close()
-PY
-
